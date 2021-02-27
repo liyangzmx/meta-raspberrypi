@@ -10,6 +10,7 @@ COMPATIBLE_MACHINE = "^rpi$"
 
 OMXPLAYER  = "${@bb.utils.contains('MACHINE_FEATURES', 'vc4graphics', '', 'omxplayer', d)}"
 
+# 为rpi-test附加rpi-gpio的包, 细节参考: rpi-gpio_0.7.0.bb
 RDEPENDS_${PN} = "\
     ${OMXPLAYER} \
     bcm2835-tests \
