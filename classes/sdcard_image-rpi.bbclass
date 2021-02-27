@@ -22,25 +22,32 @@ inherit image_types
 # |                        |            |                        |
 # 0                      4MiB     4MiB + 48MiB       4MiB + 48Mib + SDIMG_ROOTFS
 
+# 文件系统类型配置: ext3
 # This image depends on the rootfs image
 IMAGE_TYPEDEP_rpi-sdimg = "${SDIMG_ROOTFS_TYPE}"
 
+# kernel镜像的名称, 对于rpi4, 其名称为: kernel8.img
 # Kernel image name
 SDIMG_KERNELIMAGE_raspberrypi  ?= "kernel.img"
 SDIMG_KERNELIMAGE_raspberrypi2 ?= "kernel7.img"
 SDIMG_KERNELIMAGE_raspberrypi3-64 ?= "kernel8.img"
 
+# boot分区的卷名
 # Boot partition volume id
 BOOTDD_VOLUME_ID ?= "${MACHINE}"
 
+# boot分区大小
 # Boot partition size [in KiB] (will be rounded up to IMAGE_ROOTFS_ALIGNMENT)
 BOOT_SPACE ?= "49152"
 
+# rootfs镜像的对齐方式
 # Set alignment to 4MB [in KiB]
 IMAGE_ROOTFS_ALIGNMENT = "4096"
 
 # Use an uncompressed ext3 by default as rootfs
+# sd卡的rootfs文件系统类型: ext3
 SDIMG_ROOTFS_TYPE ?= "ext3"
+# 生成的文件系统镜像名称: deploy-${PN}-image-complete/kernel8.img.ext3
 SDIMG_ROOTFS = "${IMGDEPLOYDIR}/${IMAGE_LINK_NAME}.${SDIMG_ROOTFS_TYPE}"
 
 # For the names of kernel artifacts
@@ -85,6 +92,7 @@ def split_overlays(d, out, ver=None):
 
     return overlays
 
+# 打包rpi-sdimg类型的Image时执行的方法
 IMAGE_CMD_rpi-sdimg () {
 
     # Align partitions
@@ -192,6 +200,7 @@ IMAGE_CMD_rpi-sdimg () {
     fi
 }
 
+# 当文件系统构建完成后执行的动作
 ROOTFS_POSTPROCESS_COMMAND += " rpi_generate_sysctl_config ; "
 
 rpi_generate_sysctl_config() {
