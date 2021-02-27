@@ -81,6 +81,7 @@ SDIMG_VFAT = "${IMAGE_NAME}.vfat"
 SDIMG_LINK_VFAT = "${IMGDEPLOYDIR}/${IMAGE_LINK_NAME}.vfat"
 
 def split_overlays(d, out, ver=None):
+    # 获取dts文件
     dts = d.getVar("KERNEL_DEVICETREE")
     # Device Tree Overlays are assumed to be suffixed by '-overlay.dtb' (4.1.x) or by '.dtbo' (4.4.9+) string and will be put in a dedicated folder
     if out:
@@ -96,8 +97,10 @@ def split_overlays(d, out, ver=None):
 IMAGE_CMD_rpi-sdimg () {
 
     # Align partitions
+    # 分区按照48 MiB对齐
     BOOT_SPACE_ALIGNED=$(expr ${BOOT_SPACE} + ${IMAGE_ROOTFS_ALIGNMENT} - 1)
     BOOT_SPACE_ALIGNED=$(expr ${BOOT_SPACE_ALIGNED} - ${BOOT_SPACE_ALIGNED} % ${IMAGE_ROOTFS_ALIGNMENT})
+    # 计算boot的大小, 留出4MiB的空余
     SDIMG_SIZE=$(expr ${IMAGE_ROOTFS_ALIGNMENT} + ${BOOT_SPACE_ALIGNED} + $ROOTFS_SIZE)
 
     echo "Creating filesystem with Boot partition ${BOOT_SPACE_ALIGNED} KiB and RootFS $ROOTFS_SIZE KiB"
@@ -108,30 +111,43 @@ IMAGE_CMD_rpi-sdimg () {
     # Initialize sdcard image file
     dd if=/dev/zero of=${SDIMG} bs=1024 count=0 seek=${SDIMG_SIZE}
 
+    # 创建分区表
     # Create partition table
     parted -s ${SDIMG} mklabel msdos
+    # 创建启动分区并设置为可启动, 启动分区是fat32格式的
     # Create boot partition and mark it as bootable
     parted -s ${SDIMG} unit KiB mkpart primary fat32 ${IMAGE_ROOTFS_ALIGNMENT} $(expr ${BOOT_SPACE_ALIGNED} \+ ${IMAGE_ROOTFS_ALIGNMENT})
+    # 设置分区为可启动
     parted -s ${SDIMG} set 1 boot on
+    # 在启动分区末尾创建文件系统, 格式为ext2
     # Create rootfs partition to the end of disk
     parted -s ${SDIMG} -- unit KiB mkpart primary ext2 $(expr ${BOOT_SPACE_ALIGNED} \+ ${IMAGE_ROOTFS_ALIGNMENT}) -1s
+    # 打印分区信息
     parted ${SDIMG} print
 
+    # 创建一个vfat分区
     # Create a vfat image with boot files
     BOOT_BLOCKS=$(LC_ALL=C parted -s ${SDIMG} unit b print | awk '/ 1 / { print substr($4, 1, length($4 -1)) / 512 /2 }')
+    # 删除boot.img, 重新创建一个
     rm -f ${WORKDIR}/boot.img
     mkfs.vfat -F32 -n "${BOOTDD_VOLUME_ID}" -S 512 -C ${WORKDIR}/boot.img $BOOT_BLOCKS
+    # 使用mcopy完成从Unix/Linux系统拷贝文件到DOS文件系统的操作
     mcopy -v -i ${WORKDIR}/boot.img -s ${DEPLOY_DIR_IMAGE}/${BOOTFILES_DIR_NAME}/* ::/ || bbfatal "mcopy cannot copy ${DEPLOY_DIR_IMAGE}/${BOOTFILES_DIR_NAME}/* into boot.img"
+    
+    # 考虑使用armstub的情况, 参考: https://www.raspberrypi.org/documentation/configuration/config-txt/boot.md
     if [ "${@bb.utils.contains("MACHINE_FEATURES", "armstub", "1", "0", d)}" = "1" ]; then
         mcopy -v -i ${WORKDIR}/boot.img -s ${DEPLOY_DIR_IMAGE}/armstubs/${ARMSTUB} ::/ || bbfatal "mcopy cannot copy ${DEPLOY_DIR_IMAGE}/armstubs/${ARMSTUB} into boot.img"
     fi
+    # 如果dts不为空
     if test -n "${DTS}"; then
+        # 拷贝板级的设备树到boot.img
         # Copy board device trees to root folder
         for dtbf in ${@split_overlays(d, True)}; do
             dtb=`basename $dtbf`
             mcopy -v -i ${WORKDIR}/boot.img -s ${DEPLOY_DIR_IMAGE}/$dtb ::$dtb || bbfatal "mcopy cannot copy ${DEPLOY_DIR_IMAGE}/$dtb into boot.img"
         done
 
+        # 拷贝设备树的Overlay到boot.img
         # Copy device tree overlays to dedicated folder
         mmd -i ${WORKDIR}/boot.img overlays
         for dtbf in ${@split_overlays(d, False)}; do
@@ -139,10 +155,12 @@ IMAGE_CMD_rpi-sdimg () {
             mcopy -v -i ${WORKDIR}/boot.img -s ${DEPLOY_DIR_IMAGE}/$dtb ::overlays/$dtb || bbfatal "mcopy cannot copy ${DEPLOY_DIR_IMAGE}/$dtb into boot.img"
         done
     fi
+    # 如果使用u-boot引导树莓派, 则拷贝u-boot.bin, 并传递boot.scr的HUSH Shell脚本到boot.img, 参考: https://elinux.org/ECE597_boot.scr
     if [ "${RPI_USE_U_BOOT}" = "1" ]; then
         mcopy -v -i ${WORKDIR}/boot.img -s ${DEPLOY_DIR_IMAGE}/u-boot.bin ::${SDIMG_KERNELIMAGE} || bbfatal "mcopy cannot copy ${DEPLOY_DIR_IMAGE}/u-boot.bin into boot.img"
         mcopy -v -i ${WORKDIR}/boot.img -s ${DEPLOY_DIR_IMAGE}/boot.scr ::boot.scr || bbfatal "mcopy cannot copy ${DEPLOY_DIR_IMAGE}/boot.scr into boot.img"
         if [ ! -z "${INITRAMFS_IMAGE}" -a "${INITRAMFS_IMAGE_BUNDLE}" = "1" ]; then
+            # 拷贝ramdisk到boot.img
             mcopy -v -i ${WORKDIR}/boot.img -s ${DEPLOY_DIR_IMAGE}/${KERNEL_IMAGETYPE}-${INITRAMFS_LINK_NAME}.bin ::${KERNEL_IMAGETYPE} || bbfatal "mcopy cannot copy ${DEPLOY_DIR_IMAGE}/${KERNEL_IMAGETYPE}-${INITRAMFS_LINK_NAME}.bin into boot.img"
         else
             mcopy -v -i ${WORKDIR}/boot.img -s ${DEPLOY_DIR_IMAGE}/${KERNEL_IMAGETYPE} ::${KERNEL_IMAGETYPE} || bbfatal "mcopy cannot copy ${DEPLOY_DIR_IMAGE}/${KERNEL_IMAGETYPE} into boot.img"
@@ -155,6 +173,7 @@ IMAGE_CMD_rpi-sdimg () {
         fi
     fi
 
+    # 如果DEPLOYPAYLOAD不为空, 分贝拷贝到boot.imgDEPLOYPAYLOAD
     # Add files (eg. hypervisor binaries) from the deploy dir
     if [ -n "${DEPLOYPAYLOAD}" ] ; then
         echo "Copying deploy file payload into VFAT"
@@ -171,6 +190,7 @@ IMAGE_CMD_rpi-sdimg () {
         done
     fi
 
+    # 拷贝/boot/分区下的文件到boot.img
     if [ -n "${FATPAYLOAD}" ] ; then
         echo "Copying payload into VFAT"
         for entry in ${FATPAYLOAD} ; do
@@ -179,18 +199,22 @@ IMAGE_CMD_rpi-sdimg () {
         done
     fi
 
+    # 添加时间戳文件
     # Add stamp file
     echo "${IMAGE_NAME}" > ${WORKDIR}/image-version-info
     mcopy -v -i ${WORKDIR}/boot.img ${WORKDIR}/image-version-info :: || bbfatal "mcopy cannot copy ${WORKDIR}/image-version-info into boot.img"
 
+    # 发布vfat分区
     # Deploy vfat partition
     if [ "${SDIMG_VFAT_DEPLOY}" = "1" ]; then
         cp ${WORKDIR}/boot.img ${IMGDEPLOYDIR}/${SDIMG_VFAT}
         ln -sf ${SDIMG_VFAT} ${SDIMG_LINK_VFAT}
     fi
 
+    # 烧录boot.img到卡镜像
     # Burn Partitions
     dd if=${WORKDIR}/boot.img of=${SDIMG} conv=notrunc seek=1 bs=$(expr ${IMAGE_ROOTFS_ALIGNMENT} \* 1024)
+    # 如果rootfs的类型要求是xz的, 则使用xzcat
     # If SDIMG_ROOTFS_TYPE is a .xz file use xzcat
     if echo "${SDIMG_ROOTFS_TYPE}" | egrep -q "*\.xz"
     then
@@ -204,6 +228,8 @@ IMAGE_CMD_rpi-sdimg () {
 ROOTFS_POSTPROCESS_COMMAND += " rpi_generate_sysctl_config ; "
 
 rpi_generate_sysctl_config() {
+    # 如果/etc/sysctl.d存在, 则向/etc/sysctl.d/rpi-vm.conf写入vm.min_free_kbytes配置
+    # 参考: https://www.kernel.org/doc/Documentation/sysctl/vm.txt
     # systemd sysctl config
     test -d ${IMAGE_ROOTFS}${sysconfdir}/sysctl.d && \
         echo "vm.min_free_kbytes = 8192" > ${IMAGE_ROOTFS}${sysconfdir}/sysctl.d/rpi-vm.conf
